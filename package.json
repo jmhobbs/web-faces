@@ -1,0 +1,26 @@
+{
+  "name": "web-faces",
+  "version": "0.0.1",
+	"author": "John Hobbs <john@velvetcache.org>",
+  "description": "see your co-workers",
+  "contributors": [ 
+    {"name": "Alex Gates"}
+  ],
+	"scripts": {
+		"run": "node ./index.js"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/jmhobbs/web-faces"
+	},
+	"license": "MIT",
+  "dependencies": {
+    "socket.io": "~0.9.16",
+    "handlebars": "1.1.x",
+    "cookie": "~0.1.0"
+  },
+  "engines": {
+    "node": "0.10.x",
+    "npm": "1.2.x"
+  }
+}

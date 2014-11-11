@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>Faces</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<link rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css" media="screen" />
+		<link rel="stylesheet" href="/vendor/bootstrap/css/bootstrap-theme.min.css" media="screen" />
+		<link rel="stylesheet" href="/style.css" media="screen" />
+	</head>
+	<body>
+		
+		<div id="away-cover"><div id="away-notice">You Are Away</div></div>
+
+		<div class="container">
+			<div class="row" style="margin-top: 50px;">
+				<h3>
+					<button class="btn btn-primary" style="float: right;" id="away-button">Away</button>
+					<button class="btn btn-info" style="float: right; margin-right: 10px;" id="freeze-button">Freeze</button>
+					<button class="btn btn-warning" style="float: right; margin-right: 10px;" id="dance-button">Dance</button>
+					<a class="btn btn-danger" style="float: right; margin-right: 10px;" href="/">Quit</a>
+					Faces
+				</h3>
+				<div id="cameras">
+					<div id="webcam" class="user">
+						<span id="status"></span>
+						<img id="user-frame" class="frame" />
+						<canvas width="320" id="canvas" height="240" style="display: none;"></canvas>
+						<video id="live" width="320" height="240" autoplay style="display: none;"></video>
+						<span class="username">{{ username }}</span>
+					</div>
+				</div>
+			</div><!-- .row -->
+		</div>
+
+		<script src="/vendor/zepto.min.js"></script>
+		<script src="/filters.js"></script>
+		<script src="/gif.js"></script>
+		<script src="/socket.io/socket.io.js"></script>
+		<script>
+
+			$(function () {
+
+        var Faces = {
+          config: {
+            username: "{{username}}",
+            refresh_interval: {{REFRESH_INTERVAL}}
+          },
+          state: {
+            away: false
+          }
+        };
+
+
+				////////////////////////////////////////////
+				// Helpers
+
+				function getUserMarkup (username) {
+					return '<div class="user" id="user-' + normalizeUsername(username) + '">' +
+						'<img src="away.png" class="away" alt="Away" />' +
+						'<img class="frame" />' +
+						'<span class="username">' + username + '</span></div>';
+				}
+
+				function getUserWrapper (username) {
+					var $el = $('#user-' + normalizeUsername(username));
+					if( $el.length == 0 ) {
+						$('#cameras').append(getUserMarkup(username));
+						$el = $('#user-' + normalizeUsername(username));
+					}
+					return $el;
+				}
+
+				function numberOfActiveUsers () {
+					return $('#cameras img').length;
+				}
+
+				function removeUser (username) {
+					$('#user-' + normalizeUsername(username)).remove();
+				}
+
+				function getUserImage (username) {
+					return getUserWrapper(username).find('img.frame');
+				}
+
+				function ensureUserState(username, state) {
+					if( state.away ) {
+						markUserAway(username);
+					}
+					else {
+						markUserAvailable(username);
+					}
+				}
+
+				function forceUpdateUser(username) {
+					var user_image = getUserImage(username);
+					$.getJSON(
+						'/image?username=' + username + '&t=' + (+new Date()),
+						function (data) {
+							user_image.attr('src', data.url);
+						});
+				}
+
+				function markUserAway (username) {
+					getUserWrapper(username).addClass('away');
+				}
+
+				function markUserAvailable (username) {
+					getUserWrapper(username).removeClass('away');
+				}
+
+				function normalizeUsername (username) {
+					return username.replace(/[^a-zA-Z0-9]/g, '-');
+				}
+
+				////////////////////////////////////////////
+				// Webcam
+				var camera = document.getElementById('live'),
+						canvas = document.getElementById('canvas'),
+						ctx = canvas.getContext('2d');
+
+				navigator.webkitGetUserMedia(
+					{video: true, audio: false},
+					function(stream) { 
+						camera.src = webkitURL.createObjectURL(stream);
+						connect();
+					},
+					function(err) {
+						alert('Could not connect to webcam. Code ' + err.code);
+					}
+				);
+
+				var update_timer, freeze_timer, freeze_counter = 0;
+
+				function update (force) {
+					if( update_timer != null ) {
+						clearTimeout(update_timer);
+						update_timer = null;
+					}
+					if( true === force || ( freeze_counter <= 0 && numberOfActiveUsers() > 0 ) ) {
+						ctx.drawImage(camera, 0, 0, 320, 240);
+						// https://github.com/kig/canvasfilters
+						var pixels = Filters.grayscaleAvg(ctx.getImageData(0, 0, 320, 240));
+						if( Faces.state.away ) { pixels = Filters.gaussianBlur(pixels, 15); }
+						ctx.putImageData(pixels, 0, 0);
+						delete pixels;
+
+						$("#user-frame").attr("src", canvas.toDataURL("image/jpeg", 0.7));
+
+						$.ajax({
+							type: 'POST',
+							url: '/update?username=' + encodeURIComponent(Faces.config.username),
+							data: canvas.toDataURL("image/jpeg", 0.4),
+							complete: function () { 
+								if( Faces.state.away ) {
+									update_timer = setTimeout(update, Faces.config.refresh_interval * 2);
+								}
+								else {
+									update_timer = setTimeout(update, Faces.config.refresh_interval);
+								}
+							}
+						});
+					}
+					else {
+						update_timer = setTimeout(update, Faces.config.refresh_interval);
+						// TODO: Say hello at least.
+					}
+				}
+
+				////////////////////////////////////////////
+				// Socket
+
+				function connect () {
+					var socket = io.connect(location.origin.replace(/^https?:/, '' ));
+
+					function awayButtonClicked (e) {
+						e.preventDefault();
+						if( ! Faces.state.away ) {
+							Faces.state.away = true;
+							socket.emit('away');
+							$('#away-button').text('Return');
+							$('body').addClass('away');
+						}
+						else {
+							Faces.state.away = false;
+							socket.emit('return');
+							$('#away-button').text('Away');
+							$('body').removeClass('away');
+						}
+						update(true);
+					}
+
+					function freezeCountdown() {
+						if( --freeze_counter <= 0 ) {
+							freeze_counter = 0;
+							$('#freeze-button').text('Freeze');
+							return update(true);
+						}
+						else {
+							$('#freeze-button').text('Thaw - (' + freeze_counter + ')');
+							freeze_timer = setTimeout(freezeCountdown, 1000);
+						}
+					}
+
+					function freezeButtonClicked (e) {
+						 e.preventDefault();
+						 if( freeze_counter > 0 ) {
+							 freeze_counter = 0;
+							 clearTimeout(freeze_timer);
+							 freezeCountdown();
+							 return;
+						 }
+						 update(true);
+						 freeze_counter = 60;
+						 freeze_timer = setTimeout(freezeCountdown, 1000);
+					}
+
+					var gif, gif_counter;
+
+					function danceButtonClicked (e) {
+						$("#user-frame").hide();
+						$("#live").show();
+						gif_counter = 6;
+						countdownToDance();
+					}
+
+					function countdownToDance () {
+						if(--gif_counter <= 0) {
+							doDance();
+						}
+						else {
+							$("#status").text(gif_counter);
+							setTimeout(countdownToDance, 500);
+						}
+					}
+
+					function doDance () {
+						$("#status").text("DANCE!");
+						gif_counter = 0;
+						gif = new GIF({
+							workers: 2,
+							quality: 10,
+							width: 320,
+							height: 240,
+							workerScript: '/gif.worker.js'
+						});
+						
+						gif.on('finished', function(blob) {
+							$("#status").text("");
+							$("#user-frame").attr("src", URL.createObjectURL(blob));
+							$("#live").hide();
+							$("#user-frame").show();
+							var reader = new window.FileReader();
+							reader.onloadend = function() {
+                base64data = reader.result;                
+								freeze_counter = 60;
+								freeze_timer = setTimeout(freezeCountdown, 1000);
+								$.ajax({
+									type: 'POST',
+									url: '/update?username=' + encodeURIComponent(Faces.config.username),
+									data: base64data,
+									complete: function () {
+										if( Faces.state.away ) {
+											update_timer = setTimeout(update, Faces.config.refresh_interval * 2);
+										}
+										else {
+											update_timer = setTimeout(update, Faces.config.refresh_interval);
+										}
+									}
+								});
+							}
+							reader.readAsDataURL(blob);
+						});
+
+						danceButtonFrame();
+					}
+
+					function danceButtonFrame () {
+						$("#status").text("DANCE!");
+						ctx.drawImage(camera, 0, 0, 320, 240);
+						ctx.putImageData(Filters.grayscaleAvg(ctx.getImageData(0, 0, 320, 240)), 0, 0);
+						gif.addFrame(ctx, {copy: true, delay: 100});
+						if(++gif_counter > 8) {
+							$("#status").text("Rendering...");
+							gif.render();
+						}
+						else {
+							setTimeout(danceButtonFrame, 150);
+						}
+					}
+
+					/*
+						        <--- connect
+					    hello --->
+							      <--- welcome
+
+							      <--- frame
+		                <--- join
+										<--- quit
+										<--- away
+										<-- return	
+					*/
+
+					socket.on('connect', function () {
+						socket.emit('hello', {username: Faces.config.username});
+					});
+
+					socket.on('reconnect', function () {
+						// TODO: Sync state here?
+					});
+
+					socket.on('welcome', function (data) {
+						$.each(data.users, function (new_username, state) {
+							if( Faces.config.username === new_username ) { 
+								if( state.away ) {
+									Faces.state.away = true;
+									$('#away-button').text('Return');
+								}
+								return;
+							}
+							ensureUserState(new_username, state);
+							forceUpdateUser(new_username);
+						});
+
+						// Connect buttons
+						$('#away-button, #away-cover').on('click', awayButtonClicked);
+						$('#freeze-button').on('click', freezeButtonClicked);
+						$('#dance-button').on('click', danceButtonClicked);
+
+						// Give the camera a bit to come up, then take a pic
+						update_timer = setTimeout(function () { update(true); }, 1500);
+					});
+
+					socket.on('frame', function (data) {
+						if( data.username === Faces.config.username ) { return; }
+						ensureUserState(data.username, data.state);
+						if("data:image/gif;" == data.url.substr(0, 15)) {
+								$(document.body).trigger("webfaces:gif", data.username, data.url);
+						}
+						getUserImage(data.username).attr('src', data.url);
+					});
+
+					socket.on('join', function (data) {
+						if(Faces.config.username === data.username ) { return; }
+						ensureUserState(data.username, data.state);
+					});
+
+					socket.on('quit', function (data) {
+						removeUser(data.username);
+					});
+
+					socket.on('away', function (data) {
+						if( Faces.config.username === data.username ) {
+							Faces.state.away = true;
+							$('#away-button').text('Return');
+							$('body').addClass('away');
+						}
+						else {
+							markUserAway(data.username);
+						}
+					});
+
+					socket.on('return', function (data) {
+						if( Faces.config.username === data.username ) {
+							Faces.state.away = false;
+							$('#away-button').text('Away');
+							$('body').removeClass('away');
+						}
+						else {
+							markUserAvailable(data.username);
+						}
+					});
+
+				} // connectWebSocket
+
+/*
+				 function freezeButtonClicked (e) {
+					 e.preventDefault();
+					 if( $(this).text() === 'Freeze' ) {
+						 clearTimeout(update_frame_timer);
+						 updateFrame(true);
+						 $(this).text('Frozen (60)');
+						 freeze_counter = 60;
+						 setTimeout(freezerCountdown, 1000);
+					 }
+					 else {
+						 freeze_counter = 0;
+						 $(this).text('Freeze');
+					 }
+				 }
+
+					function freezerCountdown () {
+						freeze_counter--;
+						if( freeze_counter <= 0 ) {
+							$('#freeze-button').text('Freeze');
+							updateFrame();
+						}
+						else {
+							$('#freeze-button').text('Frozen (' + freeze_counter + ')');
+							setTimeout(freezerCountdown, 1000);
+						}
+					}
+*/			
+
+
+
+			});
+		</script>
+	</body>
+</html>

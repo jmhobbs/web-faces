@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>Faces</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<link rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css" media="screen" />
+		<link rel="stylesheet" href="/vendor/bootstrap/css/bootstrap-theme.min.css"  media="screen" />
+	</head>
+	<body>
+		<div class="container">
+			<div class="row" style="margin-top: 50px;">
+				<h2>Connect To Faces</h2>
+				<form method="GET" role="form">
+					<div class="form-group">
+						<label for="username">Username:</label>
+						<input type="text" name="username" class="form-control" value="{{ last_used_username }}"/>
+					</div>
+					<button type="submit" class="btn btn-primary">Go</button>
+				</form>
+			</div><!-- .row -->
+		</div>
+	</body>
+</html>
